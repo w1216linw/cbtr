@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# PyInstaller output
+build/
+dist/
+
+# Runtime files — not tracked
+address_db.xlsx
+pod.xlsx
+watch_list.xlsx
+report.xlsx
+history.csv
+address_failures.xlsx
+run.log
