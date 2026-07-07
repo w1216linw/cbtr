@@ -26,6 +26,59 @@ from cbt.reporter import (append_history, check_consecutive_failures,
 _log = logging.getLogger('cbt_report')
 
 
+# ── First-run setup ───────────────────────────────────────────────────────────
+
+def first_run_setup(base_dir: str) -> bool:
+    """Create template Excel files if missing. Returns True if any were created."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    hdr_fill = PatternFill('solid', fgColor='1F4E79')
+    hdr_font = Font(color='FFFFFF', bold=True)
+    hdr_aln  = Alignment(horizontal='center')
+
+    def _make_header(ws, label: str, width: int = 60):
+        ws.column_dimensions['A'].width = width
+        c = ws.cell(row=1, column=1, value=label)
+        c.fill, c.font, c.alignment = hdr_fill, hdr_font, hdr_aln
+
+    created = []
+
+    addr_path = os.path.join(base_dir, 'address_db.xlsx')
+    if not os.path.exists(addr_path):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '地址库'
+        _make_header(ws, '地址')
+        ws.cell(row=2, column=1, value='示例：123 Main St, Chicago, IL, 60601（请删除此行，填入实际地址）')
+        wb.save(addr_path)
+        created.append(('address_db.xlsx', '地址库，每行一个地址'))
+
+    wl_path = os.path.join(base_dir, 'watch_list.xlsx')
+    if not os.path.exists(wl_path):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '监控地址'
+        _make_header(ws, '地址')
+        wb.save(wl_path)
+        created.append(('watch_list.xlsx', '可选，需人工确认的地址'))
+
+    if created:
+        print('=' * 56)
+        print('  首次运行 — 已自动生成以下模板文件：')
+        print('=' * 56)
+        for fname, desc in created:
+            print(f'  ✅  {fname}  （{desc}）')
+        print()
+        print('  还需要手动放入同一目录：')
+        print('  ❗  pod.xlsx  — 从系统导出的当日揽收数据')
+        print()
+        print('  文件准备好后，重新运行程序即可。')
+        print('=' * 56)
+        return True
+
+    return False
+
+
 # ── Logger ────────────────────────────────────────────────────────────────────
 
 def setup_logger(base_dir: str) -> None:
@@ -89,6 +142,11 @@ def main():
     pod_path     = os.path.join(base_dir, 'pod.xlsx')
     report_path  = os.path.join(base_dir, 'report.xlsx')
     history_path = os.path.join(base_dir, 'history.csv')
+
+    # ── 首次运行：生成模板文件 ───────────────────────────────────────────────
+    if first_run_setup(base_dir):
+        input('按 Enter 键退出…')
+        sys.exit(0)
 
     # ── 必要文件检查 ─────────────────────────────────────────────────────────
     missing = []
