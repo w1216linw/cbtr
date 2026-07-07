@@ -135,7 +135,12 @@ def prompt_watch_list_overrides(results: list, watch_list: set) -> bool:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # sys.executable points to the .exe when frozen by PyInstaller;
+    # falls back to the script location when running as plain Python.
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
     setup_logger(base_dir)
 
     db_path      = os.path.join(base_dir, 'address_db.xlsx')
