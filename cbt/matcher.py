@@ -1,9 +1,17 @@
+import logging
+
 from .normalize import norm_full, norm_base, parse_db_addr
 
-# POD 揽收失败原因 → 统一输出文案
+_log = logging.getLogger('cbt_report')
+
+# POD 揽收失败原因关键词 → 统一输出文案（顺序优先，先匹配先返回）
 _REASON_MAP = [
     ('无包裹可揽收', '系统有订单但无实物'),
+    ('无包裹可揽',   '系统有订单但无实物'),
+    ('没有包裹可揽', '系统有订单但无实物'),
     ('仓库关门',     '仓库关门'),
+    ('节假日关门',   '仓库关门'),
+    ('关门',         '仓库关门'),
 ]
 
 
@@ -11,6 +19,8 @@ def _map_reason(raw: str) -> str:
     for keyword, label in _REASON_MAP:
         if keyword in raw:
             return label
+    if raw:
+        _log.debug(f'未匹配的揽收失败原因（原文）："{raw}"')
     return raw
 
 
