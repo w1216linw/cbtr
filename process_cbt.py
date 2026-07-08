@@ -3,20 +3,23 @@
 CBT Report — Daily Pickup Status Matcher
 
 Files:
-  address_db.xlsx  — address list (read-only)
-  pod.xlsx         — daily POD (read-only, updated externally)
-  report.xlsx      — daily report, OVERWRITTEN each run
-  history.csv      — cumulative failure history, APPENDED each run
-  run.log          — run log (warnings, errors, info)
+  address_db.xlsx      — address list (read-only)
+  pod.xlsx             — daily POD (read-only, updated externally)
+  report.xlsx          — daily report, OVERWRITTEN each run
+  address_failures.xlsx — weekly failure count, OVERWRITTEN each run
+  history.csv          — cumulative failure history, APPENDED each run
+  run.log              — run log (warnings, errors, info)
 """
 
 import csv
 import logging
 import os
 import sys
+from collections import defaultdict
 from datetime import datetime
 
 import openpyxl
+from openpyxl.styles import Alignment, Font, PatternFill
 
 from cbt.loader   import load_db, load_pod, load_watch_list
 from cbt.matcher  import build_pod_index, determine_status
@@ -24,21 +27,44 @@ from cbt.reporter import (append_history, check_pod_stale, pod_date, write_repor
 
 _log = logging.getLogger('cbt_report')
 
+_HDR_FILL = PatternFill('solid', fgColor='1F4E79')
+_HDR_FONT = Font(color='FFFFFF', bold=True)
+_HDR_ALN  = Alignment(horizontal='center')
+
+
+# ── Logger ────────────────────────────────────────────────────────────────────
+
+def setup_logger(base_dir: str) -> None:
+    log_path = os.path.join(base_dir, 'run.log')
+    _log.setLevel(logging.DEBUG)
+    if _log.handlers:
+        _log.handlers.clear()
+
+    fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+
+    fh = logging.FileHandler(log_path, encoding='utf-8', mode='a')
+    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(fmt)
+
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.WARNING)
+    ch.setFormatter(logging.Formatter('⚠️  [%(levelname)s] %(message)s'))
+
+    _log.addHandler(fh)
+    _log.addHandler(ch)
+
+    with open(log_path, 'a', encoding='utf-8') as f:
+        f.write(f'\n{"=" * 60}\n RUN {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n{"=" * 60}\n')
+
 
 # ── First-run setup ───────────────────────────────────────────────────────────
 
 def first_run_setup(base_dir: str) -> bool:
     """Create template Excel files if missing. Returns True if any were created."""
-    from openpyxl.styles import Alignment, Font, PatternFill
-
-    hdr_fill = PatternFill('solid', fgColor='1F4E79')
-    hdr_font = Font(color='FFFFFF', bold=True)
-    hdr_aln  = Alignment(horizontal='center')
-
     def _make_header(ws, label: str, width: int = 60):
         ws.column_dimensions['A'].width = width
         c = ws.cell(row=1, column=1, value=label)
-        c.fill, c.font, c.alignment = hdr_fill, hdr_font, hdr_aln
+        c.fill, c.font, c.alignment = _HDR_FILL, _HDR_FONT, _HDR_ALN
 
     created = []
 
@@ -78,35 +104,25 @@ def first_run_setup(base_dir: str) -> bool:
     return False
 
 
-# ── Logger ────────────────────────────────────────────────────────────────────
+# ── Menu ──────────────────────────────────────────────────────────────────────
 
-def setup_logger(base_dir: str) -> None:
-    log_path = os.path.join(base_dir, 'run.log')
-    _log.setLevel(logging.DEBUG)
-    if _log.handlers:
-        _log.handlers.clear()
-
-    fmt = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
-
-    fh = logging.FileHandler(log_path, encoding='utf-8', mode='a')
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(fmt)
-
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.WARNING)
-    ch.setFormatter(logging.Formatter('⚠️  [%(levelname)s] %(message)s'))
-
-    _log.addHandler(fh)
-    _log.addHandler(ch)
-
-    with open(log_path, 'a', encoding='utf-8') as f:
-        f.write(f'\n{"=" * 60}\n RUN {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n{"=" * 60}\n')
+def show_menu() -> str:
+    print()
+    print('=' * 46)
+    print('  CBT Report')
+    print('  1. 每日揽收报告')
+    print('  2. 失败地址统计')
+    print('=' * 46)
+    while True:
+        choice = input('  请选择 [1/2]：').strip()
+        if choice in ('1', '2'):
+            return choice
+        print('  请输入 1 或 2')
 
 
-# ── Interactive ───────────────────────────────────────────────────────────────
+# ── Feature 1: Daily report ───────────────────────────────────────────────────
 
 def prompt_watch_list_overrides(results: list, watch_list: set) -> bool:
-    """Ask for manual confirmation on watch-list addresses that failed. Mutates results in-place."""
     changed = False
     for r in results:
         if r['status'] != '揽收失败':
@@ -131,26 +147,11 @@ def prompt_watch_list_overrides(results: list, watch_list: set) -> bool:
     return changed
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
-
-def main():
-    # sys.executable points to the .exe when frozen by PyInstaller;
-    # falls back to the script location when running as plain Python.
-    if getattr(sys, 'frozen', False):
-        base_dir = os.path.dirname(sys.executable)
-    else:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-    setup_logger(base_dir)
-
+def run_daily_report(base_dir: str):
     db_path      = os.path.join(base_dir, 'address_db.xlsx')
     pod_path     = os.path.join(base_dir, 'pod.xlsx')
     report_path  = os.path.join(base_dir, 'report.xlsx')
     history_path = os.path.join(base_dir, 'history.csv')
-
-    # ── 首次运行：生成模板文件 ───────────────────────────────────────────────
-    if first_run_setup(base_dir):
-        input('按 Enter 键退出…')
-        sys.exit(0)
 
     # ── 必要文件检查 ─────────────────────────────────────────────────────────
     missing = []
@@ -159,7 +160,9 @@ def main():
             _log.error(f'缺少必要文件：{label}')
             missing.append(label)
     if missing:
-        sys.exit(f'❌  缺少文件：{", ".join(missing)}，请检查后重新运行')
+        print(f'❌  缺少文件：{", ".join(missing)}，请检查后重新运行')
+        input('按 Enter 键退出…')
+        return
 
     # ── 加载数据 ─────────────────────────────────────────────────────────────
     db_addrs            = load_db(db_path)
@@ -173,11 +176,15 @@ def main():
     # ── POD 数据校验 ─────────────────────────────────────────────────────────
     if not db_addrs:
         _log.error('address_db.xlsx 中没有地址数据，请检查文件内容')
-        sys.exit('❌  address_db.xlsx 为空')
+        print('❌  address_db.xlsx 为空')
+        input('按 Enter 键退出…')
+        return
 
     if not pod_rows:
         _log.error('pod.xlsx 中没有有效数据行，请确认文件已正确导出')
-        sys.exit('❌  pod.xlsx 无有效数据')
+        print('❌  pod.xlsx 无有效数据')
+        input('按 Enter 键退出…')
+        return
 
     if len(pod_dates) > 1:
         _log.warning(
@@ -226,15 +233,97 @@ def main():
 
     _log.info(f'运行完成 — 总地址: {total}  揽收成功: {ok_cnt}  揽收失败: {fail_cnt}')
 
-    print(f'POD日期 : {date_str}')
+    print(f'\nPOD日期 : {date_str}')
     print(f'总地址  : {total}  |  揽收成功: {ok_cnt}  |  揽收失败: {fail_cnt}')
     print(f'报告    : {report_path}')
-    print(f'历史    : {history_path}')
     print()
     print('── 揽收失败明细 ──')
     for r in results:
         if r['status'] == '揽收失败':
             print(f'  [{r["reason"]}]  {r["db_addr"]}')
+
+
+# ── Feature 2: Failure count summary ─────────────────────────────────────────
+
+def run_summary(base_dir: str):
+    history_path = os.path.join(base_dir, 'history.csv')
+    output_path  = os.path.join(base_dir, 'address_failures.xlsx')
+
+    if not os.path.exists(history_path):
+        print('❌  找不到 history.csv，请先运行每日揽收报告积累历史记录。')
+        input('按 Enter 键退出…')
+        return
+
+    # ── 读取历史，按地址统计次数 ─────────────────────────────────────────────
+    counts = defaultdict(int)
+    with open(history_path, newline='', encoding='utf-8-sig') as f:
+        for row in csv.reader(f):
+            if len(row) >= 2 and row[0] != '日期' and row[0] and row[1]:
+                counts[row[1]] += 1
+
+    if not counts:
+        print('❌  历史记录为空，暂无数据可统计。')
+        input('按 Enter 键退出…')
+        return
+
+    sorted_rows = sorted(counts.items(), key=lambda x: -x[1])
+
+    # ── 写入 Excel ────────────────────────────────────────────────────────────
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = '失败地址统计'
+    ws.column_dimensions['A'].width = 60
+    ws.column_dimensions['B'].width = 12
+
+    for col, h in enumerate(['地址', '失败次数'], 1):
+        c = ws.cell(row=1, column=col, value=h)
+        c.fill, c.font, c.alignment = _HDR_FILL, _HDR_FONT, _HDR_ALN
+
+    for addr, count in sorted_rows:
+        ws.append([addr, count])
+
+    try:
+        wb.save(output_path)
+    except PermissionError:
+        print(f'❌  无法保存 address_failures.xlsx：文件被占用，请关闭后重试。')
+        input('按 Enter 键退出…')
+        return
+
+    _log.info(f'失败地址统计完成：{len(counts)} 个地址，输出至 {output_path}')
+
+    print(f'\n统计完成，共 {len(counts)} 个地址')
+    print(f'输出文件：{output_path}')
+    print()
+    print('── 失败次数排名 ──')
+    for addr, count in sorted_rows[:15]:
+        print(f'  {count} 次  {addr}')
+    if len(sorted_rows) > 15:
+        print(f'  …（共 {len(sorted_rows)} 个，完整列表见 Excel）')
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main():
+    if getattr(sys, 'frozen', False):
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    setup_logger(base_dir)
+
+    if first_run_setup(base_dir):
+        input('按 Enter 键退出…')
+        sys.exit(0)
+
+    choice = show_menu()
+    print()
+
+    if choice == '1':
+        run_daily_report(base_dir)
+    else:
+        run_summary(base_dir)
+
+    input('\n按 Enter 键退出…')
 
 
 if __name__ == '__main__':
