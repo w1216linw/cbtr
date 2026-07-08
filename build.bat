@@ -43,7 +43,8 @@ echo ============================================================
 echo.
 echo 使用方式：将 cbt_report.exe 与以下文件放在同一目录后双击运行：
 echo   - address_db.xlsx
-echo   - pod.xlsx
-echo   - watch_list.xlsx（可选）
+echo   - pod.xlsx         （功能1：每日揽收报告）
+echo   - weekly_failures.xlsx  （功能2：失败地址统计，每周手动更新）
+echo   - watch_list.xlsx  （可选）
 echo.
 pause

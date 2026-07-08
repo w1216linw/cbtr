@@ -3,33 +3,28 @@
 CBT Report — Daily Pickup Status Matcher
 
 Files:
-  address_db.xlsx      — address list (read-only)
-  pod.xlsx             — daily POD (read-only, updated externally)
-  report.xlsx          — daily report, OVERWRITTEN each run
-  address_failures.xlsx — weekly failure count, OVERWRITTEN each run
-  history.csv          — cumulative failure history, APPENDED each run
-  run.log              — run log (warnings, errors, info)
+  address_db.xlsx       — address list (read-only)
+  pod.xlsx              — daily POD (read-only, updated externally)
+  report.xlsx           — daily report, OVERWRITTEN each run
+  weekly_failures.xlsx  — weekly failed addresses, manually maintained
+  address_failures.xlsx — failure count summary, OVERWRITTEN each run
+  run.log               — run log (warnings, errors, info)
 """
 
-import csv
 import logging
 import os
+import re
 import sys
-from collections import defaultdict
+from collections import Counter
 from datetime import datetime
 
 import openpyxl
-from openpyxl.styles import Alignment, Font, PatternFill
 
 from cbt.loader   import load_db, load_pod, load_watch_list
 from cbt.matcher  import build_pod_index, determine_status
-from cbt.reporter import (append_history, check_pod_stale, pod_date, write_report)
+from cbt.reporter import (_HDR_ALN, _HDR_FILL, _HDR_FONT, pod_date, write_report)
 
 _log = logging.getLogger('cbt_report')
-
-_HDR_FILL = PatternFill('solid', fgColor='1F4E79')
-_HDR_FONT = Font(color='FFFFFF', bold=True)
-_HDR_ALN  = Alignment(horizontal='center')
 
 
 # ── Logger ────────────────────────────────────────────────────────────────────
@@ -57,15 +52,23 @@ def setup_logger(base_dir: str) -> None:
         f.write(f'\n{"=" * 60}\n RUN {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n{"=" * 60}\n')
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _make_header(ws, label: str, width: int = 60):
+    ws.column_dimensions['A'].width = width
+    c = ws.cell(row=1, column=1, value=label)
+    c.fill, c.font, c.alignment = _HDR_FILL, _HDR_FONT, _HDR_ALN
+
+
+def _extract_addr(raw: str) -> str:
+    """Strip the failure reason (Chinese text) from a 'address reason' cell."""
+    return re.sub(r'\s*-?\s*\S*[^\x00-\x7F].*$', '', raw).strip()
+
+
 # ── First-run setup ───────────────────────────────────────────────────────────
 
 def first_run_setup(base_dir: str) -> bool:
     """Create template Excel files if missing. Returns True if any were created."""
-    def _make_header(ws, label: str, width: int = 60):
-        ws.column_dimensions['A'].width = width
-        c = ws.cell(row=1, column=1, value=label)
-        c.fill, c.font, c.alignment = _HDR_FILL, _HDR_FONT, _HDR_ALN
-
     created = []
 
     addr_path = os.path.join(base_dir, 'address_db.xlsx')
@@ -86,6 +89,15 @@ def first_run_setup(base_dir: str) -> bool:
         _make_header(ws, '地址')
         wb.save(wl_path)
         created.append(('watch_list.xlsx', '可选，需人工确认的地址'))
+
+    wf_path = os.path.join(base_dir, 'weekly_failures.xlsx')
+    if not os.path.exists(wf_path):
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = '揽收失败记录'
+        _make_header(ws, '地址')
+        wb.save(wf_path)
+        created.append(('weekly_failures.xlsx', '每周手动填入揽收失败地址，可重复填写'))
 
     if created:
         print('=' * 56)
@@ -148,10 +160,9 @@ def prompt_watch_list_overrides(results: list, watch_list: set) -> bool:
 
 
 def run_daily_report(base_dir: str):
-    db_path      = os.path.join(base_dir, 'address_db.xlsx')
-    pod_path     = os.path.join(base_dir, 'pod.xlsx')
-    report_path  = os.path.join(base_dir, 'report.xlsx')
-    history_path = os.path.join(base_dir, 'history.csv')
+    db_path     = os.path.join(base_dir, 'address_db.xlsx')
+    pod_path    = os.path.join(base_dir, 'pod.xlsx')
+    report_path = os.path.join(base_dir, 'report.xlsx')
 
     # ── 必要文件检查 ─────────────────────────────────────────────────────────
     missing = []
@@ -199,22 +210,6 @@ def run_daily_report(base_dir: str):
             f'请确认导出时已按本站点过滤，否则匹配结果可能不准确'
         )
 
-    # ── 一次性迁移：history.xlsx → history.csv ───────────────────────────────
-    old_history = os.path.join(base_dir, 'history.xlsx')
-    if os.path.exists(old_history) and not os.path.exists(history_path):
-        wb = openpyxl.load_workbook(old_history, read_only=True)
-        ws = wb.active
-        with open(history_path, 'w', newline='', encoding='utf-8-sig') as f:
-            w = csv.writer(f)
-            for row in ws.iter_rows(values_only=True):
-                if any(cell is not None for cell in row):
-                    w.writerow(['' if cell is None else str(cell) for cell in row])
-        wb.close()
-        _log.info('已将 history.xlsx 迁移至 history.csv')
-        print('✅  已将 history.xlsx 迁移至 history.csv')
-
-    check_pod_stale(date_str, history_path)
-
     # ── 匹配 & 输出 ──────────────────────────────────────────────────────────
     full_idx, base_idx = build_pod_index(pod_rows)
     results = [determine_status(addr, full_idx, base_idx) for addr in db_addrs]
@@ -224,7 +219,6 @@ def run_daily_report(base_dir: str):
         if overridden:
             print()
 
-    append_history(results, date_str, history_path)
     write_report(results, report_path)
 
     total    = len(results)
@@ -246,29 +240,35 @@ def run_daily_report(base_dir: str):
 # ── Feature 2: Failure count summary ─────────────────────────────────────────
 
 def run_summary(base_dir: str):
-    history_path = os.path.join(base_dir, 'history.csv')
-    output_path  = os.path.join(base_dir, 'address_failures.xlsx')
+    input_path  = os.path.join(base_dir, 'weekly_failures.xlsx')
+    output_path = os.path.join(base_dir, 'address_failures.xlsx')
 
-    if not os.path.exists(history_path):
-        print('❌  找不到 history.csv，请先运行每日揽收报告积累历史记录。')
+    if not os.path.exists(input_path):
+        print('❌  找不到 weekly_failures.xlsx，请先创建并填入揽收失败地址。')
         input('按 Enter 键退出…')
         return
 
-    # ── 读取历史，按地址统计次数 ─────────────────────────────────────────────
-    counts = defaultdict(int)
-    with open(history_path, newline='', encoding='utf-8-sig') as f:
-        for row in csv.reader(f):
-            if len(row) >= 2 and row[0] != '日期' and row[0] and row[1]:
-                counts[row[1]] += 1
+    # ── 读取 weekly_failures.xlsx，按地址统计次数 ────────────────────────────
+    wb_in = openpyxl.load_workbook(input_path, read_only=True)
+    ws_in = wb_in.active
+    addrs = []
+    for row in ws_in.iter_rows(min_row=2, max_col=1, values_only=True):
+        val = row[0]
+        if val is not None and str(val).strip():
+            addr = _extract_addr(str(val).strip())
+            if addr:
+                addrs.append(addr)
+    wb_in.close()
 
-    if not counts:
-        print('❌  历史记录为空，暂无数据可统计。')
+    if not addrs:
+        print('❌  weekly_failures.xlsx 中没有数据（第2行起填写地址）。')
         input('按 Enter 键退出…')
         return
 
+    counts = Counter(addrs)
     sorted_rows = sorted(counts.items(), key=lambda x: -x[1])
 
-    # ── 写入 Excel ────────────────────────────────────────────────────────────
+    # ── 写入 address_failures.xlsx ───────────────────────────────────────────
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = '失败地址统计'
@@ -285,13 +285,13 @@ def run_summary(base_dir: str):
     try:
         wb.save(output_path)
     except PermissionError:
-        print(f'❌  无法保存 address_failures.xlsx：文件被占用，请关闭后重试。')
+        print('❌  无法保存 address_failures.xlsx：文件被占用，请关闭后重试。')
         input('按 Enter 键退出…')
         return
 
-    _log.info(f'失败地址统计完成：{len(counts)} 个地址，输出至 {output_path}')
+    _log.info(f'失败地址统计完成：{len(counts)} 个地址，共 {len(addrs)} 条记录，输出至 {output_path}')
 
-    print(f'\n统计完成，共 {len(counts)} 个地址')
+    print(f'\n读取记录：{len(addrs)} 条  |  独立地址：{len(counts)} 个')
     print(f'输出文件：{output_path}')
     print()
     print('── 失败次数排名 ──')

@@ -26,7 +26,7 @@ def load_db(path: str) -> list:
 
 def load_pod(path: str):
     """Returns (filtered_rows, all_dates_in_file)."""
-    wb = openpyxl.load_workbook(path)
+    wb = openpyxl.load_workbook(path, read_only=True)
     ws = wb.active
 
     headers = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]

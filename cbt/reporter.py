@@ -1,4 +1,3 @@
-import csv
 import logging
 import os
 import re
@@ -12,9 +11,9 @@ _log = logging.getLogger('cbt_report')
 
 _HDR_FILL  = PatternFill('solid', fgColor='1F4E79')
 _HDR_FONT  = Font(color='FFFFFF', bold=True)
+_HDR_ALN   = Alignment(horizontal='center')
 _OK_FILL   = PatternFill('solid', fgColor='C6EFCE')
 _FL_FILL   = PatternFill('solid', fgColor='FFC7CE')
-_CTR       = Alignment(horizontal='center')
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -63,7 +62,7 @@ def write_report(results, path: str):
             continue
         c.fill = _HDR_FILL
         c.font = _HDR_FONT
-        c.alignment = _CTR
+        c.alignment = _HDR_ALN
 
     ws.cell(row=2, column=1, value=total)
     ws.cell(row=2, column=2, value=ok_cnt).fill  = _OK_FILL
@@ -85,42 +84,3 @@ def write_report(results, path: str):
     ws.row_dimensions[2].height = max(30, len(failures) * 15)
 
     _save(wb, path)
-
-
-# ── History CSV ───────────────────────────────────────────────────────────────
-
-def append_history(results, date_str: str, path: str):
-    """Write today's failures to history.csv, replacing any existing rows for the same date."""
-    failures = [r for r in results if r['status'] == '揽收失败']
-
-    existing = []
-    if os.path.exists(path):
-        with open(path, newline='', encoding='utf-8-sig') as f:
-            for row in csv.reader(f):
-                if row and row[0] != date_str:
-                    existing.append(row)
-    else:
-        existing = [['日期', '地址', '揽收失败原因']]
-
-    with open(path, 'w', newline='', encoding='utf-8-sig') as f:
-        w = csv.writer(f)
-        w.writerows(existing)
-        for r in failures:
-            w.writerow([date_str, r['db_addr'], r['reason']])
-
-
-
-def check_pod_stale(date_str: str, history_path: str):
-    """Warn if pod.xlsx date already exists in history and today is a different date."""
-    if not os.path.exists(history_path):
-        return
-    today = datetime.today().strftime('%Y-%m-%d')
-    if date_str == today:
-        return
-    with open(history_path, newline='', encoding='utf-8-sig') as f:
-        existing = {r[0] for r in csv.reader(f) if r and r[0] != '日期'}
-    if date_str in existing:
-        _log.warning(
-            f'pod.xlsx 的日期 {date_str} 已存在于历史记录中，'
-            f'pod.xlsx 可能尚未更新，report.xlsx 将使用旧数据'
-        )
