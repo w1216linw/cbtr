@@ -14,8 +14,6 @@ _HDR_FILL  = PatternFill('solid', fgColor='1F4E79')
 _HDR_FONT  = Font(color='FFFFFF', bold=True)
 _OK_FILL   = PatternFill('solid', fgColor='C6EFCE')
 _FL_FILL   = PatternFill('solid', fgColor='FFC7CE')
-_WARN_FILL = PatternFill('solid', fgColor='FFEB9C')
-_WARN_FONT = Font(color='9C6500', bold=True)
 _CTR       = Alignment(horizontal='center')
 
 
@@ -40,7 +38,7 @@ def pod_date(pod_rows) -> str:
 
 # ── Daily report ──────────────────────────────────────────────────────────────
 
-def write_report(results, path: str, consecutive: list):
+def write_report(results, path: str):
     total    = len(results)
     ok_cnt   = sum(1 for r in results if r['status'] == '揽收成功')
     fail_cnt = total - ok_cnt
@@ -53,23 +51,18 @@ def write_report(results, path: str, consecutive: list):
         return m.group(1) if m else ''
 
     street_nums = ', '.join(street_number(r['db_addr']) for r in failures if street_number(r['db_addr']))
-    consec_cell = '\n'.join(consecutive)
 
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = '揽收报告'
 
-    headers = ['地址库总数', '揽收成功', '揽收失败', '', '揽收失败明细', '揽收失败街道号', '⚠️ 连续三天未揽收']
+    headers = ['地址库总数', '揽收成功', '揽收失败', '', '揽收失败明细', '揽收失败街道号']
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=1, column=col, value=h)
         if not h:
             continue
-        if col == 7 and consecutive:
-            c.fill = _WARN_FILL
-            c.font = _WARN_FONT
-        else:
-            c.fill = _HDR_FILL
-            c.font = _HDR_FONT
+        c.fill = _HDR_FILL
+        c.font = _HDR_FONT
         c.alignment = _CTR
 
     ws.cell(row=2, column=1, value=total)
@@ -87,14 +80,9 @@ def write_report(results, path: str, consecutive: list):
     if failures:
         f.fill = _FL_FILL
 
-    g = ws.cell(row=2, column=7, value=consec_cell)
-    g.alignment = Alignment(wrap_text=True, vertical='top')
-    if consecutive:
-        g.fill = _WARN_FILL
-
-    for col, w in zip('ABCDEFG', [14, 14, 14, 6, 80, 60, 60]):
+    for col, w in zip('ABCDEF', [14, 14, 14, 6, 80, 60]):
         ws.column_dimensions[col].width = w
-    ws.row_dimensions[2].height = max(30, max(len(failures), len(consecutive)) * 15)
+    ws.row_dimensions[2].height = max(30, len(failures) * 15)
 
     _save(wb, path)
 
@@ -120,29 +108,6 @@ def append_history(results, date_str: str, path: str):
         for r in failures:
             w.writerow([date_str, r['db_addr'], r['reason']])
 
-
-def check_consecutive_failures(path: str, n: int = 3):
-    """Returns addresses that failed on every one of the last n recorded dates."""
-    if not os.path.exists(path):
-        return [], []
-
-    with open(path, newline='', encoding='utf-8-sig') as f:
-        rows = [(r[0], r[1]) for r in csv.reader(f) if len(r) >= 2 and r[0] != '日期' and r[0] and r[1]]
-
-    if not rows:
-        return [], []
-
-    all_dates = sorted(set(d for d, _ in rows))
-    if len(all_dates) < n:
-        return [], all_dates
-
-    last_n = set(all_dates[-n:])
-    addr_dates = {}
-    for date, addr in rows:
-        addr_dates.setdefault(addr, set()).add(date)
-
-    flagged = [addr for addr, dates in addr_dates.items() if last_n.issubset(dates)]
-    return flagged, sorted(last_n)
 
 
 def check_pod_stale(date_str: str, history_path: str):

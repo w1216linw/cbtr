@@ -20,8 +20,7 @@ import openpyxl
 
 from cbt.loader   import load_db, load_pod, load_watch_list
 from cbt.matcher  import build_pod_index, determine_status
-from cbt.reporter import (append_history, check_consecutive_failures,
-                           check_pod_stale, pod_date, write_report)
+from cbt.reporter import (append_history, check_pod_stale, pod_date, write_report)
 
 _log = logging.getLogger('cbt_report')
 
@@ -219,19 +218,13 @@ def main():
             print()
 
     append_history(results, date_str, history_path)
-    consecutive, last_dates = check_consecutive_failures(history_path)
-    write_report(results, report_path, consecutive)
+    write_report(results, report_path)
 
     total    = len(results)
     ok_cnt   = sum(1 for r in results if r['status'] == '揽收成功')
     fail_cnt = total - ok_cnt
 
     _log.info(f'运行完成 — 总地址: {total}  揽收成功: {ok_cnt}  揽收失败: {fail_cnt}')
-    if consecutive:
-        _log.warning(
-            f'连续 {len(last_dates)} 天揽收失败（{" / ".join(last_dates)}）：'
-            f'{"; ".join(consecutive)}'
-        )
 
     print(f'POD日期 : {date_str}')
     print(f'总地址  : {total}  |  揽收成功: {ok_cnt}  |  揽收失败: {fail_cnt}')
@@ -242,12 +235,6 @@ def main():
     for r in results:
         if r['status'] == '揽收失败':
             print(f'  [{r["reason"]}]  {r["db_addr"]}')
-
-    if consecutive:
-        print()
-        print(f'⚠️  连续 {len(last_dates)} 天揽收失败（{" / ".join(last_dates)}）：')
-        for addr in consecutive:
-            print(f'  {addr}')
 
 
 if __name__ == '__main__':
